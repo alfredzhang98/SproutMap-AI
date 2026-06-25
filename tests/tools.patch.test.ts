@@ -62,6 +62,29 @@ describe("planMapPatchFromCards", () => {
     expect(patch.operations[0].payload.relation).toBe("option_of");
   });
 
+  it("caps options at 6 and steps at 7", () => {
+    const mk = (n: number, type: "method" | "step") =>
+      Array.from({ length: n }, (_, i) => card({ id: `c${i}`, type, title: `${type} ${i}` }));
+    const opts = planMapPatchFromCards({
+      cards: mk(9, "method"),
+      nodes: [ROOT],
+      intent: "generate_options",
+      automationLevel: "patch_preview",
+      selectedNodeId: "root",
+      summary: "x",
+    });
+    expect(opts.operations).toHaveLength(6);
+    const steps = planMapPatchFromCards({
+      cards: mk(9, "step"),
+      nodes: [ROOT],
+      intent: "generate_steps",
+      automationLevel: "patch_preview",
+      selectedNodeId: "root",
+      summary: "x",
+    });
+    expect(steps.operations).toHaveLength(7);
+  });
+
   it("creates a topic island for a discrete topic", () => {
     const patch = planMapPatchFromCards({
       cards: [

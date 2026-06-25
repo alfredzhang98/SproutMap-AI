@@ -7,6 +7,7 @@ import { MapCanvas } from "@/components/canvas/MapCanvas";
 import { Inspector } from "@/components/inspector/Inspector";
 import { ApiKeyModal } from "@/components/settings/ApiKeyModal";
 import { HelpModal } from "@/components/settings/HelpModal";
+import { GenerateModal } from "@/components/settings/GenerateModal";
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 
 const AUTOMATION_MODES: { value: "manual" | "balanced" | "auto_assist"; label: string }[] =
@@ -179,6 +180,7 @@ export function AppShell() {
   const apiKey = useAppStore((s) => s.apiKey);
   const [keyOpen, setKeyOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
@@ -206,7 +208,10 @@ export function AppShell() {
       <div className={`grid min-h-0 flex-1 ${cols}`}>
         {sidebarOpen && (
           <aside className="min-h-0 border-r border-[var(--border)]">
-            <WorkspaceSidebar onOpenHelp={() => setHelpOpen(true)} />
+            <WorkspaceSidebar
+              onOpenHelp={() => setHelpOpen(true)}
+              onOpenGenerate={() => setGenerateOpen(true)}
+            />
           </aside>
         )}
         <div className="col-span-3 flex min-h-0 flex-col">
@@ -230,6 +235,7 @@ export function AppShell() {
       </div>
       <ApiKeyModal open={keyOpen} onClose={() => setKeyOpen(false)} />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <GenerateModal open={generateOpen} onClose={() => setGenerateOpen(false)} />
     </div>
   );
 }

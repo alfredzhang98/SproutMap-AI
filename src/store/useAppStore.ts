@@ -21,6 +21,8 @@ import { DEFAULT_MODEL } from "@/types/llm";
 import type {
   AutomationLevel,
   AutomationMode,
+  ComparisonResult,
+  DraftMapResult,
   GenerateResult,
   MapPatch,
   NodeMemoryResult,
@@ -202,6 +204,9 @@ type AppState = {
   streamingMessageId?: string;
   isSending: boolean;
   isRefactoring: boolean;
+  isDrafting: boolean;
+  isComparing: boolean;
+  lastComparison?: ComparisonResult;
   error?: string;
   hydrated: boolean;
 
@@ -229,6 +234,11 @@ type AppState = {
   resendFrom: (messageId: string, content: string) => Promise<void>;
   runRefactor: (instruction?: string) => Promise<void>;
   summarizeNode: (nodeId: string) => Promise<void>;
+  draftFromText: (text: string) => Promise<void>;
+  runComparison: (question: string) => Promise<void>;
+  addComparisonToMap: (result: ComparisonResult) => void;
+  clearComparison: () => void;
+  toggleCollapse: (nodeId: string) => void;
   clearError: () => void;
   dismissAutomationBanner: () => void;
 
@@ -309,6 +319,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   isSending: false,
   isRefactoring: false,
   hydrated: false,
+  isDrafting: false,
+  isComparing: false,
 
   setApiKey: (key) => {
     if (typeof window !== "undefined") {
@@ -652,6 +664,233 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Request failed." });
     }
+  },
+
+  toggleCollapse: (nodeId) => {
+    const node = get().nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    get().updateNodeData(nodeId, { collapsed: !node.data.map.collapsed });
+  },
+
+  // ── Long-text → layered draft map ──────────────────────────────────────────
+  draftFromText: async (text) => {
+    const state = get();
+    if (!state.apiKey) {
+      set({ error: "Add your Gemini API key first." });
+      return;
+    }
+    const t = text.trim();
+    if (!t) return;
+    set({ isDrafting: true, error: undefined });
+    try {
+      const res = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          op: "draft",
+          apiKey: state.apiKey,
+          model: state.model,
+          text: t,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Request failed.");
+      const result = json.data as DraftMapResult;
+
+      const before = snapshotGraph(get());
+      const maps = get().nodes.map((n) => n.data.map);
+      const rootExists = getRootNode(maps);
+      const island = rootExists ? newId("island") : "island_root";
+
+      const titleNode = defaultNodeData({
+        title: result.title,
+        type: rootExists ? "topic" : "root",
+        oneLineSummary: result.summary,
+        topicIslandId: island,
+        isDraft: true,
+        createdBy: "ai",
+      });
+      const newMaps: MapNodeData[] = [titleNode];
+      const newEdges: MapEdgeData[] = [];
+      result.branches.forEach((b, bi) => {
+        const bn = defaultNodeData({
+          title: b.title,
+          type: "topic",
+          oneLineSummary: b.summary,
+          parentId: titleNode.id,
+          topicIslandId: island,
+          orderIndex: bi,
+          isDraft: true,
+        });
+        newMaps.push(bn);
+        newEdges.push({
+          id: newId("edge"),
+          source: titleNode.id,
+          target: bn.id,
+          relation: "contains",
+          createdBy: "ai",
+        });
+        b.children.forEach((c, ci) => {
+          const cn = defaultNodeData({
+            title: c.title,
+            type: "concept",
+            oneLineSummary: c.summary,
+            parentId: bn.id,
+            topicIslandId: island,
+            orderIndex: ci,
+            isDraft: true,
+          });
+          newMaps.push(cn);
+          newEdges.push({
+            id: newId("edge"),
+            source: bn.id,
+            target: cn.id,
+            relation: "part_of",
+            createdBy: "ai",
+          });
+        });
+      });
+
+      const graph: GraphState = {
+        nodes: [...maps, ...newMaps],
+        edges: [...get().edges.map((e) => e.data!.map), ...newEdges],
+      };
+      const rebuilt = rebuildFromGraph(get().nodes, graph);
+      const laid = autoLayout(rebuilt.nodes, rebuilt.edges);
+      const title = get().workspaceTitle;
+      set({
+        nodes: laid,
+        edges: rebuilt.edges,
+        undoStack: [...get().undoStack, before].slice(-MAX_UNDO),
+        workspaceTitle:
+          !title || title === "Untitled map" ? result.title : title,
+        lastAutomation: {
+          level: "full_auto_draft",
+          reason: "Draft generated from text — refine, simplify, or collapse.",
+          summary: `${result.branches.length} branches, ${newMaps.length - 1} nodes`,
+          applied: true,
+          allowUndo: true,
+        },
+      });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Request failed." });
+    } finally {
+      set({ isDrafting: false });
+      persist(get());
+    }
+  },
+
+  // ── Comparison matrix ──────────────────────────────────────────────────────
+  runComparison: async (question) => {
+    const state = get();
+    if (!state.apiKey) {
+      set({ error: "Add your Gemini API key first." });
+      return;
+    }
+    const q = question.trim();
+    if (!q) return;
+    set({ isComparing: true, error: undefined, lastComparison: undefined });
+    try {
+      const res = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          op: "compare",
+          apiKey: state.apiKey,
+          model: state.model,
+          question: q,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Request failed.");
+      set({ lastComparison: json.data as ComparisonResult });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Request failed." });
+    } finally {
+      set({ isComparing: false });
+    }
+  },
+  clearComparison: () => set({ lastComparison: undefined }),
+  addComparisonToMap: (result) => {
+    const before = snapshotGraph(get());
+    const maps = get().nodes.map((n) => n.data.map);
+    const rootExists = getRootNode(maps);
+    const island = rootExists ? newId("island") : "island_root";
+
+    const titleNode = defaultNodeData({
+      title: result.title,
+      type: rootExists ? "topic" : "root",
+      oneLineSummary: "Comparison",
+      topicIslandId: island,
+      createdBy: "ai",
+    });
+    const newMaps: MapNodeData[] = [titleNode];
+    const newEdges: MapEdgeData[] = [];
+    const link = (source: string, target: string, relation: EdgeRelation) =>
+      newEdges.push({ id: newId("edge"), source, target, relation, createdBy: "ai" });
+
+    result.options.forEach((o, i) => {
+      const ratings = result.cells
+        .filter((c) => c.option === o.name)
+        .map((c) => `${c.criterion}: ${c.rating}`)
+        .join(" · ");
+      const node = defaultNodeData({
+        title: o.name,
+        type: "method",
+        oneLineSummary: o.summary,
+        detailSummary: ratings || undefined,
+        parentId: titleNode.id,
+        topicIslandId: island,
+        orderIndex: i,
+      });
+      newMaps.push(node);
+      link(titleNode.id, node.id, "option_of");
+    });
+    result.criteria.forEach((cr, i) => {
+      const node = defaultNodeData({
+        title: cr.name,
+        type: "metric",
+        oneLineSummary: "Evaluation criterion",
+        parentId: titleNode.id,
+        topicIslandId: island,
+        orderIndex: result.options.length + i,
+      });
+      newMaps.push(node);
+      link(titleNode.id, node.id, "relates_to");
+    });
+    if (result.recommendation) {
+      const rec = defaultNodeData({
+        title: "Recommendation",
+        type: "decision",
+        oneLineSummary: result.recommendation,
+        parentId: titleNode.id,
+        topicIslandId: island,
+        orderIndex: result.options.length + result.criteria.length,
+      });
+      newMaps.push(rec);
+      link(titleNode.id, rec.id, "derived_from");
+    }
+
+    const graph: GraphState = {
+      nodes: [...maps, ...newMaps],
+      edges: [...get().edges.map((e) => e.data!.map), ...newEdges],
+    };
+    const rebuilt = rebuildFromGraph(get().nodes, graph);
+    set({
+      nodes: autoLayout(rebuilt.nodes, rebuilt.edges),
+      edges: rebuilt.edges,
+      undoStack: [...get().undoStack, before].slice(-MAX_UNDO),
+      lastComparison: undefined,
+      selectedNodeId: titleNode.id,
+      lastAutomation: {
+        level: "patch_preview",
+        reason: "Comparison added to the map.",
+        summary: `${result.options.length} options × ${result.criteria.length} criteria`,
+        applied: true,
+        allowUndo: true,
+      },
+    });
+    persist(get());
   },
 
   // ── Map patch ────────────────────────────────────────────────────────────

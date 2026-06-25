@@ -14,6 +14,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useAppStore } from "@/store/useAppStore";
 import { NODE_TYPE_META } from "@/types/map";
+import { getSubtree } from "@/lib/tools/graph";
 import { RootNode } from "./nodes/RootNode";
 import { MapNode } from "./nodes/MapNode";
 import { GhostNode } from "./nodes/GhostNode";
@@ -63,6 +64,18 @@ function CanvasInner() {
 
   const { screenToFlowPosition } = useReactFlow();
 
+  // Hide descendants of any collapsed node.
+  const hiddenIds = useMemo(() => {
+    const maps = nodes.map((n) => n.data.map);
+    const hidden = new Set<string>();
+    for (const n of nodes) {
+      if (n.data.map.collapsed) {
+        for (const d of getSubtree(n.id, maps)) hidden.add(d.id);
+      }
+    }
+    return hidden;
+  }, [nodes]);
+
   // Derive ghost preview nodes from high-confidence pending cards.
   const ghostNodes = useMemo<Node[]>(() => {
     const nodeById = new Map(nodes.map((n) => [n.id, n]));
@@ -72,6 +85,7 @@ function CanvasInner() {
       if (card.status !== "pending") continue;
       if (card.confidence < GHOST_CONFIDENCE) continue;
       if (!card.suggestedParentId) continue;
+      if (hiddenIds.has(card.suggestedParentId)) continue;
       const parent = nodeById.get(card.suggestedParentId);
       if (!parent) continue;
       const index = perParent.get(parent.id) ?? 0;
@@ -89,19 +103,21 @@ function CanvasInner() {
       });
     }
     return ghosts;
-  }, [candidateCards, nodes]);
+  }, [candidateCards, nodes, hiddenIds]);
 
   const renderedNodes = useMemo<Node[]>(() => {
-    const base: Node[] = nodes.map((n) => ({
-      ...n,
-      selected: n.id === selectedNodeId,
-    }));
+    const base: Node[] = nodes
+      .filter((n) => !hiddenIds.has(n.id))
+      .map((n) => ({ ...n, selected: n.id === selectedNodeId }));
     return [...base, ...ghostNodes];
-  }, [nodes, ghostNodes, selectedNodeId]);
+  }, [nodes, ghostNodes, selectedNodeId, hiddenIds]);
 
   const renderedEdges = useMemo(
-    () => edges.map((e) => ({ ...e, selected: e.id === selectedEdgeId })),
-    [edges, selectedEdgeId]
+    () =>
+      edges
+        .filter((e) => !hiddenIds.has(e.source) && !hiddenIds.has(e.target))
+        .map((e) => ({ ...e, selected: e.id === selectedEdgeId })),
+    [edges, selectedEdgeId, hiddenIds]
   );
 
   const onDrop = useCallback(

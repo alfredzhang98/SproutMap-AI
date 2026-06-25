@@ -131,6 +131,30 @@ export type NodeMemoryResult = {
   openQuestions: string[];
 };
 
+// ── Long-text → layered draft map ───────────────────────────────────────────
+
+export type DraftBranch = {
+  title: string;
+  summary: string;
+  children: { title: string; summary: string }[];
+};
+
+export type DraftMapResult = {
+  title: string;
+  summary: string;
+  branches: DraftBranch[];
+};
+
+// ── Comparison / decision matrix ─────────────────────────────────────────────
+
+export type ComparisonResult = {
+  title: string;
+  options: { name: string; summary: string }[];
+  criteria: { name: string }[];
+  cells: { option: string; criterion: string; rating: string; note?: string }[];
+  recommendation: string;
+};
+
 // ── Refactor skill result ────────────────────────────────────────────────────
 
 export type RefactorResult = {

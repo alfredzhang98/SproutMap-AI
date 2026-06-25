@@ -42,10 +42,15 @@ export function planMapPatchFromCards(args: {
   selectedNodeId?: string;
   summary: string;
 }): MapPatch {
-  const { cards, nodes, intent, automationLevel, selectedNodeId, summary } = args;
+  const { nodes, intent, automationLevel, selectedNodeId, summary } = args;
   const relation = relationForIntent(intent);
   const root = getRootNode(nodes);
   const isFlow = intent === "generate_steps";
+
+  // Hard caps (PRD §17.9): flow ≤7 steps, options ≤6 alternatives.
+  const cap =
+    intent === "generate_steps" ? 7 : intent === "generate_options" ? 6 : 7;
+  const cards = args.cards.slice(0, cap);
 
   const operations: MapPatchOperation[] = [];
   let previousTempId: string | undefined;

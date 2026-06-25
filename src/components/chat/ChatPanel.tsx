@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/store/useAppStore";
-import type { ContextMode } from "@/lib/context";
+import { buildContextPayload, type ContextMode } from "@/lib/context";
 import { CandidateCardTray } from "./CandidateCardTray";
 import { MapPatchPreview } from "./MapPatchPreview";
 import { AutomationBanner } from "./AutomationBanner";
@@ -28,12 +28,41 @@ export function ChatPanel() {
   const nodes = useAppStore((s) => s.nodes);
   const apiKey = useAppStore((s) => s.apiKey);
 
+  const edges = useAppStore((s) => s.edges);
+  const messagesForCtx = useAppStore((s) => s.messages);
+  const workspaceTitle = useAppStore((s) => s.workspaceTitle);
+
   const [input, setInput] = useState("");
+  const [showPreview, setShowPreview] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const selectedNode = selectedNodeId
     ? nodes.find((n) => n.id === selectedNodeId)
     : undefined;
+
+  const contextPreview = useMemo(() => {
+    if (!showPreview) return null;
+    return buildContextPayload({
+      workspace: {
+        workspaceTitle,
+        nodes: nodes.map((n) => n.data.map),
+        edges: edges.map((e) => e.data!.map),
+        messages: messagesForCtx,
+      },
+      selectedNodeId,
+      contextMode,
+      userQuestion: input,
+    });
+  }, [
+    showPreview,
+    workspaceTitle,
+    nodes,
+    edges,
+    messagesForCtx,
+    selectedNodeId,
+    contextMode,
+    input,
+  ]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -118,7 +147,44 @@ export function ChatPanel() {
               </button>
             ))}
           </div>
+          <button
+            onClick={() => setShowPreview((v) => !v)}
+            className={
+              "ml-auto rounded-md border px-2 py-1 text-[10px] transition " +
+              (showPreview
+                ? "border-[var(--primary)] bg-[var(--surface-soft)] text-[var(--primary-dark)]"
+                : "border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--surface-soft)]")
+            }
+            title="Preview what context this question will use"
+          >
+            Preview context
+          </button>
         </div>
+
+        {contextPreview && (
+          <div className="mb-2 rounded-md border border-[var(--border)] bg-[var(--surface-soft)] px-2.5 py-2 text-[10px] leading-relaxed text-[var(--text-muted)]">
+            <div className="mb-0.5 font-semibold text-[var(--text-main)]">
+              This question will use:
+            </div>
+            <div>· Mode: {contextPreview.contextMode.replace(/_/g, " ")}</div>
+            {contextPreview.selectedPath.length > 0 && (
+              <div>· Path: {contextPreview.selectedPath.join(" › ")}</div>
+            )}
+            <div>
+              · {contextPreview.childrenSummaries.length} children,{" "}
+              {contextPreview.siblingSummaries.length} siblings
+              {contextPreview.subtreeSummaries
+                ? `, ${contextPreview.subtreeSummaries.length} subtree`
+                : ""}
+              {contextPreview.islandSummaries
+                ? `, ${contextPreview.islandSummaries.length} island`
+                : ""}
+            </div>
+            <div>· {contextPreview.recentMessages.length} recent messages</div>
+            <div>· Map index: {contextPreview.globalMapIndex.length} nodes</div>
+          </div>
+        )}
+
         <div className="mb-1.5 text-[10px] text-[var(--text-muted)]">{scopeHint}</div>
         <div className="flex items-end gap-2">
           <textarea

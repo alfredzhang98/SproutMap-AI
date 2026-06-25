@@ -3,7 +3,13 @@
 import { useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
 
-export function WorkspaceSidebar({ onOpenHelp }: { onOpenHelp: () => void }) {
+export function WorkspaceSidebar({
+  onOpenHelp,
+  onOpenGenerate,
+}: {
+  onOpenHelp: () => void;
+  onOpenGenerate: () => void;
+}) {
   const workspaces = useAppStore((s) => s.workspaces);
   const workspaceId = useAppStore((s) => s.workspaceId);
   const newWorkspace = useAppStore((s) => s.newWorkspace);
@@ -22,12 +28,18 @@ export function WorkspaceSidebar({ onOpenHelp }: { onOpenHelp: () => void }) {
         <span className="text-sm font-bold text-[var(--primary-dark)]">SproutMap</span>
       </div>
 
-      <div className="px-3 pb-2">
+      <div className="space-y-1.5 px-3 pb-2">
         <button
           onClick={newWorkspace}
           className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--primary-dark)] px-3 py-2 text-xs font-medium text-white transition hover:opacity-90"
         >
           <span className="text-sm leading-none">+</span> New map
+        </button>
+        <button
+          onClick={onOpenGenerate}
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition hover:bg-white"
+        >
+          ✨ Generate map
         </button>
       </div>
 

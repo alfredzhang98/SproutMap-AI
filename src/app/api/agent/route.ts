@@ -8,13 +8,15 @@ import {
 } from "@/lib/skills/generate";
 import { runRefactorSkill } from "@/lib/skills/refactor";
 import { runMemorySkill } from "@/lib/skills/memory";
+import { runDraftSkill } from "@/lib/skills/draft";
+import { runComparisonSkill } from "@/lib/skills/compare";
 import type { IntentHeuristicHint } from "@/lib/skills/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Body = {
-  op?: "generate" | "refactor" | "summarize";
+  op?: "generate" | "refactor" | "summarize" | "draft" | "compare";
   apiKey?: string;
   model?: string;
   // generate
@@ -26,6 +28,10 @@ type Body = {
   userInstruction?: string;
   // summarize
   memoryPayload?: unknown;
+  // draft
+  text?: string;
+  // compare
+  question?: string;
 };
 
 export async function POST(req: Request) {
@@ -69,6 +75,24 @@ export async function POST(req: Request) {
         model,
         payload: body.memoryPayload,
       });
+      return NextResponse.json({ data });
+    }
+
+    if (op === "draft") {
+      const text = (body.text || "").trim();
+      if (!text) {
+        return NextResponse.json({ error: "Missing text." }, { status: 400 });
+      }
+      const data = await runDraftSkill({ apiKey, model, text });
+      return NextResponse.json({ data });
+    }
+
+    if (op === "compare") {
+      const question = (body.question || "").trim();
+      if (!question) {
+        return NextResponse.json({ error: "Missing question." }, { status: 400 });
+      }
+      const data = await runComparisonSkill({ apiKey, model, question });
       return NextResponse.json({ data });
     }
 

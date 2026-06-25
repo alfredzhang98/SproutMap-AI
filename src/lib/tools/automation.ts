@@ -96,12 +96,13 @@ export function decideAutomationLevel(
   }
 
   // Explicit request, clear scope, high confidence → scoped auto-add.
+  // Cap auto-add at 5 nodes (PRD §17.9); larger goes to patch preview above.
   if (
     userExplicitCommand &&
     selectedNodeId &&
     relationConfidence >= 0.8 &&
     relevanceToSelectedNode >= 0.8 &&
-    proposedNodeCount <= 7 &&
+    proposedNodeCount <= 5 &&
     !createsCrossTopicEdges
   ) {
     return {

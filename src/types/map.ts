@@ -45,6 +45,8 @@ export type MapNodeData = {
   openQuestions?: string[];
   // Marks nodes produced by a full-auto draft generation.
   isDraft?: boolean;
+  // When true, this node's descendants are hidden on the canvas.
+  collapsed?: boolean;
 };
 
 export type MapEdgeData = {

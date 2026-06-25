@@ -1,5 +1,6 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { NODE_TYPE_META, type MapNodeData } from "@/types/map";
+import { useAppStore } from "@/store/useAppStore";
 import { TypeBadge } from "./TypeBadge";
 
 export function MapNode({ data, selected, targetPosition, sourcePosition }: NodeProps) {
@@ -7,9 +8,13 @@ export function MapNode({ data, selected, targetPosition, sourcePosition }: Node
   const meta = NODE_TYPE_META[map.type];
   const target = targetPosition ?? Position.Top;
   const source = sourcePosition ?? Position.Bottom;
+  const childCount = useAppStore(
+    (s) => s.nodes.filter((n) => n.data.map.parentId === map.id).length
+  );
+  const toggleCollapse = useAppStore((s) => s.toggleCollapse);
   return (
     <div
-      className="w-[216px] rounded-2xl border bg-[var(--surface)] px-3.5 py-2.5 shadow-soft transition"
+      className="relative w-[216px] rounded-2xl border bg-[var(--surface)] px-3.5 py-2.5 shadow-soft transition"
       style={{
         borderColor: selected ? "var(--primary-dark)" : "var(--border)",
         boxShadow: selected
@@ -37,6 +42,18 @@ export function MapNode({ data, selected, targetPosition, sourcePosition }: Node
       )}
       {map.isLocked && (
         <div className="mt-1 text-[9px] text-[var(--text-muted)]">🔒 locked</div>
+      )}
+      {childCount > 0 && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleCollapse(map.id);
+          }}
+          title={map.collapsed ? "Expand subtree" : "Collapse subtree"}
+          className="absolute -bottom-2.5 left-1/2 z-10 flex h-5 -translate-x-1/2 items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[9px] text-[var(--text-muted)] shadow-sm hover:bg-[var(--surface-soft)]"
+        >
+          {map.collapsed ? `▸ ${childCount}` : "▾"}
+        </button>
       )}
       <Handle type="source" position={source} />
     </div>
