@@ -10,7 +10,8 @@ import type { AutomationMode } from "@/types/agent";
 import type { ContextMode } from "./context";
 
 export type PersistedWorkspace = {
-  version: 1;
+  version: 2;
+  id: string;
   workspaceTitle: string;
   nodes: Node<{ map: MapNodeData }>[];
   edges: Edge<{ map: MapEdgeData }>[];
@@ -19,38 +20,139 @@ export type PersistedWorkspace = {
   model: AllowedModel;
   contextMode: ContextMode;
   automationMode?: AutomationMode;
+  createdAt: string;
   savedAt: string;
 };
 
-const STORAGE_KEY = "sproutmap.workspace.v1";
+export type WorkspaceMeta = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  nodeCount: number;
+};
 
-export function saveToLocal(ws: PersistedWorkspace): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(ws));
-  } catch (err) {
-    // Storage may be full or unavailable; fail silently for MVP.
-    console.warn("SproutMap: failed to persist workspace", err);
-  }
-}
+type WorkspaceIndex = {
+  activeId?: string;
+  list: WorkspaceMeta[];
+};
 
-export function loadFromLocal(): PersistedWorkspace | null {
+const INDEX_KEY = "sproutmap.index.v1";
+const WS_PREFIX = "sproutmap.ws.";
+const LEGACY_KEY = "sproutmap.workspace.v1";
+
+function safeGet(key: string): string | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PersistedWorkspace;
-    if (!parsed || parsed.version !== 1) return null;
-    return parsed;
-  } catch (err) {
-    console.warn("SproutMap: failed to load workspace", err);
+    return window.localStorage.getItem(key);
+  } catch {
     return null;
   }
 }
 
-export function clearLocal(): void {
+function safeSet(key: string, value: string) {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(STORAGE_KEY);
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (err) {
+    console.warn("SproutMap: failed to persist", err);
+  }
+}
+
+function readIndex(): WorkspaceIndex {
+  const raw = safeGet(INDEX_KEY);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as WorkspaceIndex;
+      if (parsed && Array.isArray(parsed.list)) return parsed;
+    } catch {
+      /* fall through */
+    }
+  }
+  // Migrate a legacy single-workspace store if present.
+  const legacy = safeGet(LEGACY_KEY);
+  if (legacy) {
+    try {
+      const ws = JSON.parse(legacy);
+      const id = ws.id || `ws_${Date.now().toString(36)}`;
+      const migrated: PersistedWorkspace = {
+        ...ws,
+        version: 2,
+        id,
+        createdAt: ws.savedAt || new Date().toISOString(),
+      };
+      safeSet(WS_PREFIX + id, JSON.stringify(migrated));
+      const index: WorkspaceIndex = {
+        activeId: id,
+        list: [
+          {
+            id,
+            title: migrated.workspaceTitle,
+            updatedAt: migrated.savedAt,
+            nodeCount: migrated.nodes?.length ?? 0,
+          },
+        ],
+      };
+      safeSet(INDEX_KEY, JSON.stringify(index));
+      if (typeof window !== "undefined") window.localStorage.removeItem(LEGACY_KEY);
+      return index;
+    } catch {
+      /* ignore */
+    }
+  }
+  return { list: [] };
+}
+
+function writeIndex(index: WorkspaceIndex) {
+  safeSet(INDEX_KEY, JSON.stringify(index));
+}
+
+export function listWorkspaces(): WorkspaceMeta[] {
+  return readIndex()
+    .list.slice()
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export function getActiveWorkspaceId(): string | undefined {
+  return readIndex().activeId;
+}
+
+export function setActiveWorkspaceId(id: string) {
+  const index = readIndex();
+  writeIndex({ ...index, activeId: id });
+}
+
+export function loadWorkspaceById(id: string): PersistedWorkspace | null {
+  const raw = safeGet(WS_PREFIX + id);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PersistedWorkspace;
+    return { ...parsed, version: 2, id };
+  } catch {
+    return null;
+  }
+}
+
+export function saveWorkspaceDoc(ws: PersistedWorkspace) {
+  safeSet(WS_PREFIX + ws.id, JSON.stringify(ws));
+  const index = readIndex();
+  const meta: WorkspaceMeta = {
+    id: ws.id,
+    title: ws.workspaceTitle,
+    updatedAt: ws.savedAt,
+    nodeCount: ws.nodes?.length ?? 0,
+  };
+  const list = index.list.filter((m) => m.id !== ws.id);
+  list.push(meta);
+  writeIndex({ activeId: ws.id, list });
+}
+
+export function deleteWorkspaceDoc(id: string): string | undefined {
+  if (typeof window !== "undefined") window.localStorage.removeItem(WS_PREFIX + id);
+  const index = readIndex();
+  const list = index.list.filter((m) => m.id !== id);
+  const activeId = index.activeId === id ? list[0]?.id : index.activeId;
+  writeIndex({ activeId, list });
+  return activeId;
 }
 
 export function exportWorkspaceJson(ws: PersistedWorkspace): void {
@@ -75,7 +177,7 @@ export function parseWorkspaceJson(text: string): PersistedWorkspace | null {
   try {
     const parsed = JSON.parse(text) as PersistedWorkspace;
     if (!parsed.nodes || !Array.isArray(parsed.nodes)) return null;
-    return { ...parsed, version: 1 };
+    return { ...parsed, version: 2 };
   } catch {
     return null;
   }

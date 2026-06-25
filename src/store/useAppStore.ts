@@ -49,11 +49,21 @@ import {
   type GraphState,
 } from "@/lib/tools/patch";
 import {
+  extractPartialAnswer,
+  normalizeGenerateResult,
+  safeParseModelJson,
+} from "@/lib/skills/generate";
+import {
+  deleteWorkspaceDoc,
   exportWorkspaceJson,
-  loadFromLocal,
+  getActiveWorkspaceId,
+  listWorkspaces,
+  loadWorkspaceById,
   parseWorkspaceJson,
-  saveToLocal,
+  saveWorkspaceDoc,
+  setActiveWorkspaceId,
   type PersistedWorkspace,
+  type WorkspaceMeta,
 } from "@/lib/persistence";
 
 export type AppNode = Node<{ map: MapNodeData }>;
@@ -88,6 +98,7 @@ function makeRfEdge(map: MapEdgeData): AppEdge {
     id: map.id,
     source: map.source,
     target: map.target,
+    type: "smoothstep",
     label: map.label || relationLabel(map.relation),
     data: { map },
     animated: map.relation === "next_step",
@@ -119,7 +130,14 @@ function defaultNodeData(
   };
 }
 
-/** Convert the RF node/edge view into a plain graph for the deterministic tools. */
+/** Place a new child to the right of its parent, stacked in a non-overlapping column. */
+function childPosition(parent: AppNode, childIndex: number) {
+  return {
+    x: parent.position.x + 280,
+    y: parent.position.y + childIndex * 120,
+  };
+}
+
 function snapshotGraph(state: { nodes: AppNode[]; edges: AppEdge[] }): GraphState {
   return {
     nodes: state.nodes.map((n) => n.data.map),
@@ -147,13 +165,13 @@ function rebuildFromGraph(prev: AppNode[], graph: GraphState): {
       if (parentPos) {
         const idx = childCounter.get(map.parentId!) ?? 0;
         childCounter.set(map.parentId!, idx + 1);
-        position = { x: parentPos.x + 250, y: parentPos.y + idx * 100 };
+        position = { x: parentPos.x + 280, y: parentPos.y + idx * 120 };
       } else {
         if (!islandSeen.has(map.topicIslandId)) {
           islandSeen.add(map.topicIslandId);
           islandIdx += 1;
         }
-        position = { x: 80 + islandIdx * 340, y: 80 + (placed.size % 6) * 44 };
+        position = { x: 80 + islandIdx * 360, y: 80 + (placed.size % 6) * 46 };
       }
     }
     placed.set(map.id, position);
@@ -164,6 +182,9 @@ function rebuildFromGraph(prev: AppNode[], graph: GraphState): {
 }
 
 type AppState = {
+  workspaceId: string;
+  workspaceCreatedAt: string;
+  workspaces: WorkspaceMeta[];
   workspaceTitle: string;
   nodes: AppNode[];
   edges: AppEdge[];
@@ -178,6 +199,7 @@ type AppState = {
   pendingPatch?: MapPatch;
   lastAutomation?: AutomationBanner;
   undoStack: GraphState[];
+  streamingMessageId?: string;
   isSending: boolean;
   isRefactoring: boolean;
   error?: string;
@@ -190,6 +212,11 @@ type AppState = {
   setAutomationMode: (mode: AutomationMode) => void;
   setWorkspaceTitle: (title: string) => void;
 
+  // documents
+  switchWorkspace: (id: string) => void;
+  deleteWorkspace: (id: string) => void;
+  refreshWorkspaces: () => void;
+
   // react-flow
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
@@ -199,6 +226,7 @@ type AppState = {
 
   // chat / agent pipeline
   sendMessage: (content: string) => Promise<void>;
+  resendFrom: (messageId: string, content: string) => Promise<void>;
   runRefactor: (instruction?: string) => Promise<void>;
   summarizeNode: (nodeId: string) => Promise<void>;
   clearError: () => void;
@@ -247,7 +275,8 @@ function snapshot(state: AppState): WorkspaceSnapshot {
 
 function persist(state: AppState) {
   const payload: PersistedWorkspace = {
-    version: 1,
+    version: 2,
+    id: state.workspaceId,
     workspaceTitle: state.workspaceTitle,
     nodes: state.nodes,
     edges: state.edges,
@@ -256,13 +285,19 @@ function persist(state: AppState) {
     model: state.model,
     contextMode: state.contextMode,
     automationMode: state.automationMode,
+    createdAt: state.workspaceCreatedAt,
     savedAt: nowIso(),
   };
-  saveToLocal(payload);
+  saveWorkspaceDoc(payload);
 }
 
+const initialId = newId("ws");
+
 export const useAppStore = create<AppState>((set, get) => ({
-  workspaceTitle: "Untitled workspace",
+  workspaceId: initialId,
+  workspaceCreatedAt: nowIso(),
+  workspaces: [],
+  workspaceTitle: "Untitled map",
   nodes: [],
   edges: [],
   messages: [],
@@ -297,6 +332,44 @@ export const useAppStore = create<AppState>((set, get) => ({
   setWorkspaceTitle: (workspaceTitle) => {
     set({ workspaceTitle });
     persist(get());
+    get().refreshWorkspaces();
+  },
+
+  // ── Documents ──────────────────────────────────────────────────────────────
+  refreshWorkspaces: () => set({ workspaces: listWorkspaces() }),
+  switchWorkspace: (id) => {
+    if (id === get().workspaceId) return;
+    persist(get());
+    const doc = loadWorkspaceById(id);
+    if (!doc) return;
+    setActiveWorkspaceId(id);
+    set({
+      workspaceId: doc.id,
+      workspaceCreatedAt: doc.createdAt,
+      workspaceTitle: doc.workspaceTitle,
+      nodes: doc.nodes ?? [],
+      edges: doc.edges ?? [],
+      messages: doc.messages ?? [],
+      candidateCards: doc.candidateCards ?? [],
+      model: doc.model ?? DEFAULT_MODEL,
+      contextMode: doc.contextMode ?? "selected_node",
+      automationMode: doc.automationMode ?? "balanced",
+      pendingPatch: undefined,
+      lastAutomation: undefined,
+      undoStack: [],
+      selectedNodeId: undefined,
+      selectedEdgeId: undefined,
+      error: undefined,
+    });
+    get().refreshWorkspaces();
+  },
+  deleteWorkspace: (id) => {
+    const nextActive = deleteWorkspaceDoc(id);
+    if (id === get().workspaceId) {
+      if (nextActive) get().switchWorkspace(nextActive);
+      else get().newWorkspace();
+    }
+    get().refreshWorkspaces();
   },
 
   onNodesChange: (changes) => {
@@ -328,7 +401,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearError: () => set({ error: undefined }),
   dismissAutomationBanner: () => set({ lastAutomation: undefined }),
 
-  // ── Main agent pipeline ────────────────────────────────────────────────
+  // ── Main agent pipeline (streaming) ────────────────────────────────────────
   sendMessage: async (content) => {
     const state = get();
     const trimmed = content.trim();
@@ -351,14 +424,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       error: undefined,
     });
 
-    // Tool: deterministic intent pre-pass.
     const hint = classifyIntentHeuristic(
       trimmed,
       !!state.selectedNodeId,
       state.nodes.length > 0
     );
-
-    // Tool: context builder.
     const contextPayload = buildContextPayload({
       workspace: snapshot(get()),
       selectedNodeId: state.selectedNodeId,
@@ -379,15 +449,74 @@ export const useAppStore = create<AppState>((set, get) => ({
           hint,
         }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || "Request failed.");
-      applyGenerateResult(set, get, json.data as GenerateResult, hint);
+
+      const contentType = res.headers?.get?.("content-type") ?? "";
+
+      if (res.body && contentType.includes("text/plain")) {
+        // Streaming path: show the answer live, then parse structure.
+        const placeholderId = newId("msg");
+        set({
+          streamingMessageId: placeholderId,
+          messages: [
+            ...get().messages,
+            {
+              id: placeholderId,
+              role: "assistant",
+              content: "",
+              createdAt: nowIso(),
+            },
+          ],
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let acc = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          acc += decoder.decode(value, { stream: true });
+          const partial = extractPartialAnswer(acc);
+          if (partial) updateMessageContent(set, get, placeholderId, partial);
+        }
+
+        const raw = safeParseModelJson(acc);
+        if (!raw) throw new Error("Model returned malformed output.");
+        const data = normalizeGenerateResult(raw, hint);
+        applyGenerateResult(set, get, data, hint, placeholderId);
+        set({ streamingMessageId: undefined });
+      } else {
+        // JSON path (non-stream / tests).
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error || "Request failed.");
+        applyGenerateResult(set, get, json.data as GenerateResult, hint);
+      }
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : "Request failed." });
+      set({
+        error: err instanceof Error ? err.message : "Request failed.",
+        streamingMessageId: undefined,
+      });
     } finally {
       set({ isSending: false });
       persist(get());
     }
+  },
+
+  /** Edit/regenerate: drop this message and everything after it, then re-send. */
+  resendFrom: async (messageId, content) => {
+    const text = content.trim();
+    if (!text || get().isSending) return;
+    const { messages, candidateCards } = get();
+    const idx = messages.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    const removedIds = new Set(messages.slice(idx).map((m) => m.id));
+    set({
+      messages: messages.slice(0, idx),
+      candidateCards: candidateCards.filter(
+        (c) => !(removedIds.has(c.sourceMessageId) && c.status !== "accepted")
+      ),
+      pendingPatch: undefined,
+    });
+    await get().sendMessage(text);
   },
 
   runRefactor: async (instruction) => {
@@ -539,11 +668,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   acceptPatch: () => {
-    const state = get();
-    const patch = state.pendingPatch;
+    const patch = get().pendingPatch;
     if (!patch) return;
     applyPatchInternal(set, get, patch, { autoLayoutAfter: false });
-    // Mark any cards referenced by this patch as accepted.
     const acceptedCardIds = new Set(
       patch.operations
         .map((o) => o.payload?.tempId)
@@ -606,10 +733,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       orderIndex: childCount,
       createdBy: "ai",
     });
-    const position = {
-      x: parent.position.x + 60,
-      y: parent.position.y + 120 + childCount * 30,
-    };
     const edgeData: MapEdgeData = {
       id: newId("edge"),
       source: parentNodeId,
@@ -618,7 +741,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       createdBy: "ai",
     };
     set({
-      nodes: [...state.nodes, makeRfNode(map, position)],
+      nodes: [...state.nodes, makeRfNode(map, childPosition(parent, childCount))],
       edges: [...state.edges, makeRfEdge(edgeData)],
       candidateCards: state.candidateCards.map((c) =>
         c.id === cardId ? { ...c, status: "accepted" } : c
@@ -820,10 +943,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       orderIndex: childCount,
       createdBy: "user",
     });
-    const position = {
-      x: parent.position.x + 60,
-      y: parent.position.y + 120 + childCount * 30,
-    };
     const edgeData: MapEdgeData = {
       id: newId("edge"),
       source: parentId,
@@ -832,7 +951,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       createdBy: "user",
     };
     set({
-      nodes: [...state.nodes, makeRfNode(map, position)],
+      nodes: [...state.nodes, makeRfNode(map, childPosition(parent, childCount))],
       edges: [...state.edges, makeRfEdge(edgeData)],
       selectedNodeId: map.id,
     });
@@ -847,31 +966,43 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveWorkspace: () => persist(get()),
   loadWorkspace: () => get().hydrate(),
   hydrate: () => {
-    const persisted = loadFromLocal();
     const apiKey =
       typeof window !== "undefined"
         ? window.sessionStorage.getItem(API_KEY_STORAGE) ?? undefined
         : undefined;
-    if (!persisted) {
+    const activeId = getActiveWorkspaceId();
+    const doc = activeId ? loadWorkspaceById(activeId) : null;
+    if (!doc) {
+      // Fresh start — register the current empty workspace.
       set({ hydrated: true, apiKey });
+      persist(get());
+      set({ workspaces: listWorkspaces() });
       return;
     }
     set({
-      workspaceTitle: persisted.workspaceTitle,
-      nodes: persisted.nodes,
-      edges: persisted.edges,
-      messages: persisted.messages,
-      candidateCards: persisted.candidateCards,
-      model: persisted.model ?? DEFAULT_MODEL,
-      contextMode: persisted.contextMode ?? "selected_node",
-      automationMode: persisted.automationMode ?? "balanced",
+      workspaceId: doc.id,
+      workspaceCreatedAt: doc.createdAt,
+      workspaceTitle: doc.workspaceTitle,
+      nodes: doc.nodes ?? [],
+      edges: doc.edges ?? [],
+      messages: doc.messages ?? [],
+      candidateCards: doc.candidateCards ?? [],
+      model: doc.model ?? DEFAULT_MODEL,
+      contextMode: doc.contextMode ?? "selected_node",
+      automationMode: doc.automationMode ?? "balanced",
       apiKey,
       hydrated: true,
+      workspaces: listWorkspaces(),
     });
   },
   newWorkspace: () => {
+    persist(get());
+    const id = newId("ws");
+    setActiveWorkspaceId(id);
     set({
-      workspaceTitle: "Untitled workspace",
+      workspaceId: id,
+      workspaceCreatedAt: nowIso(),
+      workspaceTitle: "Untitled map",
       nodes: [],
       edges: [],
       messages: [],
@@ -884,11 +1015,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       error: undefined,
     });
     persist(get());
+    get().refreshWorkspaces();
   },
   exportJson: () => {
     const state = get();
     exportWorkspaceJson({
-      version: 1,
+      version: 2,
+      id: state.workspaceId,
       workspaceTitle: state.workspaceTitle,
       nodes: state.nodes,
       edges: state.edges,
@@ -897,14 +1030,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       model: state.model,
       contextMode: state.contextMode,
       automationMode: state.automationMode,
+      createdAt: state.workspaceCreatedAt,
       savedAt: nowIso(),
     });
   },
   importJson: (text) => {
     const parsed = parseWorkspaceJson(text);
     if (!parsed) return false;
+    const id = newId("ws");
+    setActiveWorkspaceId(id);
     set({
-      workspaceTitle: parsed.workspaceTitle ?? "Imported workspace",
+      workspaceId: id,
+      workspaceCreatedAt: parsed.createdAt ?? nowIso(),
+      workspaceTitle: parsed.workspaceTitle ?? "Imported map",
       nodes: parsed.nodes ?? [],
       edges: parsed.edges ?? [],
       messages: parsed.messages ?? [],
@@ -918,6 +1056,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedEdgeId: undefined,
     });
     persist(get());
+    get().refreshWorkspaces();
     return true;
   },
 }));
@@ -925,7 +1064,19 @@ export const useAppStore = create<AppState>((set, get) => ({
 type SetFn = (partial: Partial<AppState>) => void;
 type GetFn = () => AppState;
 
-/** Apply a patch to the live RF graph, snapshotting the previous graph for undo. */
+function updateMessageContent(
+  set: SetFn,
+  get: GetFn,
+  messageId: string,
+  content: string
+) {
+  set({
+    messages: get().messages.map((m) =>
+      m.id === messageId ? { ...m, content } : m
+    ),
+  });
+}
+
 function applyPatchInternal(
   set: SetFn,
   get: GetFn,
@@ -946,29 +1097,24 @@ function applyPatchInternal(
 }
 
 /**
- * Orchestrate the result of the generate skill: append the answer, ensure a
- * root exists, stage candidate cards, then choose an automation level and act
- * on it (cards only / ghost preview / scoped auto-add / patch preview / draft).
+ * Orchestrate the generate result: write/append the answer, ensure a root,
+ * stage candidate cards, then decide an automation level and act on it.
  */
 function applyGenerateResult(
   set: SetFn,
   get: GetFn,
   data: GenerateResult,
-  hint: { explicitMapCommand: boolean }
+  hint: { explicitMapCommand: boolean },
+  assistantMessageId?: string
 ) {
   const state = get();
-  const assistantMessage: ChatMessage = {
-    id: newId("msg"),
-    role: "assistant",
-    content: data.answer || data.mapPatchSummary || "(no answer)",
-    createdAt: nowIso(),
-  };
+  const msgId = assistantMessageId ?? newId("msg");
+  const finalAnswer = data.answer || data.mapPatchSummary || "(no answer)";
 
   let nodes = state.nodes;
   let workspaceTitle = state.workspaceTitle;
   let rootId = getRootNode(nodes.map((n) => n.data.map))?.id;
 
-  // Create a root if none exists yet (and the turn intends to build a map).
   const wantsMap =
     data.shouldCreateCards ||
     data.candidateCards.length > 0 ||
@@ -981,20 +1127,19 @@ function applyGenerateResult(
       type: "root",
       oneLineSummary: data.mapPatchSummary || "Workspace root",
       topicIslandId: "island_root",
-      sourceMessageIds: [assistantMessage.id],
+      sourceMessageIds: [msgId],
       createdBy: "ai",
     });
     rootId = rootMap.id;
     nodes = [...nodes, makeRfNode(rootMap, { x: 360, y: 60 })];
   }
   if (
-    (!workspaceTitle || workspaceTitle === "Untitled workspace") &&
+    (!workspaceTitle || workspaceTitle === "Untitled map") &&
     data.workspaceTitleSuggestion
   ) {
     workspaceTitle = data.workspaceTitleSuggestion.trim();
   }
 
-  // Resolve a suggested parent for each card.
   const maps = nodes.map((n) => n.data.map);
   const resolveParent = (parentTitle?: string): string | undefined => {
     if (data.intent === "create_discrete_topic") return undefined;
@@ -1018,22 +1163,35 @@ function applyGenerateResult(
     suggestedParentTitle: draft.suggestedParentTitle,
     suggestedRelation: draft.suggestedRelation,
     confidence: draft.confidence,
-    sourceMessageId: assistantMessage.id,
+    sourceMessageId: msgId,
     status: "pending",
   }));
 
-  // Commit answer + root + staged cards first.
+  // Append or update the assistant message.
+  const baseMessages = assistantMessageId
+    ? get().messages.map((m) =>
+        m.id === msgId
+          ? { ...m, content: finalAnswer, generatedCardIds: cards.map((c) => c.id) }
+          : m
+      )
+    : [
+        ...get().messages,
+        {
+          id: msgId,
+          role: "assistant" as const,
+          content: finalAnswer,
+          createdAt: nowIso(),
+          generatedCardIds: cards.map((c) => c.id),
+        },
+      ];
+
   set({
     nodes,
     workspaceTitle,
-    messages: [
-      ...get().messages,
-      { ...assistantMessage, generatedCardIds: cards.map((c) => c.id) },
-    ],
+    messages: baseMessages,
     candidateCards: [...state.candidateCards, ...cards],
   });
 
-  // Tool: decide how far to automate this turn.
   const avgConfidence =
     cards.length > 0
       ? cards.reduce((s, c) => s + c.confidence, 0) / cards.length
@@ -1058,7 +1216,6 @@ function applyGenerateResult(
 
   const summary = data.mapPatchSummary || describeCards(cards);
 
-  // Act on the decision.
   if (cards.length === 0) {
     set({
       lastAutomation: {
@@ -1072,10 +1229,7 @@ function applyGenerateResult(
     return;
   }
 
-  if (
-    decision.level === "auto_add_scoped" ||
-    decision.level === "full_auto_draft"
-  ) {
+  if (decision.level === "auto_add_scoped" || decision.level === "full_auto_draft") {
     const patch = planMapPatchFromCards({
       cards,
       nodes: get().nodes.map((n) => n.data.map),
@@ -1125,8 +1279,6 @@ function applyGenerateResult(
     return;
   }
 
-  // ghost_preview / candidate_only — cards stay in the tray (ghosts derive
-  // from high-confidence cards in the canvas).
   set({
     lastAutomation: {
       level: decision.level,

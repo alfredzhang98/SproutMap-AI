@@ -6,6 +6,7 @@ import type { ContextMode } from "@/lib/context";
 import { CandidateCardTray } from "./CandidateCardTray";
 import { MapPatchPreview } from "./MapPatchPreview";
 import { AutomationBanner } from "./AutomationBanner";
+import { MessageBubble } from "./MessageBubble";
 
 const CONTEXT_OPTIONS: { value: ContextMode; label: string }[] = [
   { value: "global", label: "Global" },
@@ -17,6 +18,7 @@ const CONTEXT_OPTIONS: { value: ContextMode; label: string }[] = [
 export function ChatPanel() {
   const messages = useAppStore((s) => s.messages);
   const isSending = useAppStore((s) => s.isSending);
+  const streamingMessageId = useAppStore((s) => s.streamingMessageId);
   const error = useAppStore((s) => s.error);
   const contextMode = useAppStore((s) => s.contextMode);
   const setContextMode = useAppStore((s) => s.setContextMode);
@@ -65,22 +67,19 @@ export function ChatPanel() {
           </div>
         )}
         {messages.map((m) => (
-          <div
+          <MessageBubble
             key={m.id}
-            className={
-              m.role === "user"
-                ? "ml-6 rounded-lg rounded-br-sm bg-[var(--primary-light)] px-3 py-2 text-sm text-[var(--text-main)]"
-                : "mr-6 rounded-lg rounded-bl-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-main)]"
-            }
-          >
-            <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-              {m.role === "user" ? "You" : "SproutMap"}
-            </div>
-            <div className="whitespace-pre-wrap leading-snug">{m.content}</div>
-          </div>
+            message={m}
+            streaming={m.id === streamingMessageId}
+          />
         ))}
-        {isSending && (
-          <div className="mr-6 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-muted)]">
+        {isSending && !streamingMessageId && (
+          <div className="mr-6 flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-muted)]">
+            <span className="inline-flex gap-1">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--primary)] [animation-delay:-0.2s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--primary)] [animation-delay:-0.1s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--primary)]" />
+            </span>
             Thinking…
           </div>
         )}

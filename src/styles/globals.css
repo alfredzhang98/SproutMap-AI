@@ -63,6 +63,12 @@ body {
   fill: var(--text-muted);
   font-size: 10px;
 }
+.react-flow__edge-textbg {
+  fill: var(--background);
+}
+.react-flow__edge-path {
+  stroke-linecap: round;
+}
 .react-flow__handle {
   background: var(--primary);
   border: 1px solid var(--surface);

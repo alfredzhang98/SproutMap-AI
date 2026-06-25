@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
-import { isAllowedModel } from "@/lib/gemini";
+import { isAllowedModel, openGeminiStream } from "@/lib/gemini";
 import { DEFAULT_MODEL } from "@/types/llm";
-import { runGenerateSkill } from "@/lib/skills/generate";
+import {
+  GENERATE_SCHEMA,
+  GENERATE_SYSTEM_PROMPT,
+  buildGenerateUserContent,
+} from "@/lib/skills/generate";
 import { runRefactorSkill } from "@/lib/skills/refactor";
 import { runMemorySkill } from "@/lib/skills/memory";
 import type { IntentHeuristicHint } from "@/lib/skills/types";
@@ -68,7 +72,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ data });
     }
 
-    // default: generate
+    // default: generate (streamed — answer field first)
     const userQuestion = (body.userQuestion || "").trim();
     if (!userQuestion) {
       return NextResponse.json(
@@ -82,14 +86,14 @@ export async function POST(req: Request) {
       explicitMapCommand: false,
     };
 
-    const data = await runGenerateSkill({
+    return await openGeminiStream({
       apiKey,
       model,
-      contextPayload: body.contextPayload,
-      userQuestion,
-      hint,
+      system: GENERATE_SYSTEM_PROMPT,
+      user: buildGenerateUserContent(body.contextPayload, userQuestion, hint),
+      schema: GENERATE_SCHEMA,
+      temperature: 0.5,
     });
-    return NextResponse.json({ data });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to reach the model.";

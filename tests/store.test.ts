@@ -6,7 +6,7 @@ import { makeEdge, makeMap, makeNode } from "./factories";
 
 function resetStore() {
   useAppStore.setState({
-    workspaceTitle: "Untitled workspace",
+    workspaceTitle: "Untitled map",
     nodes: [],
     edges: [],
     messages: [],

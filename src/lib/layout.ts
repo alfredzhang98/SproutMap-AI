@@ -1,5 +1,5 @@
 import Dagre from "@dagrejs/dagre";
-import type { Edge, Node } from "@xyflow/react";
+import { Position, type Edge, type Node } from "@xyflow/react";
 import type { MapEdgeData, MapNodeData } from "@/types/map";
 
 export const NODE_WIDTH = 210;
@@ -75,10 +75,16 @@ export function autoLayout(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
     if (!isFinite(minX)) minX = 0;
     if (!isFinite(maxX)) maxX = NODE_WIDTH;
 
+    // Route handles along the flow direction so edges leave/enter the right side.
+    const sourcePosition = direction === "LR" ? Position.Right : Position.Bottom;
+    const targetPosition = direction === "LR" ? Position.Left : Position.Top;
+
     for (const { node, x, y } of laid) {
       positioned.push({
         ...node,
         position: { x: x - minX + offsetX, y },
+        sourcePosition,
+        targetPosition,
       });
     }
 
