@@ -83,7 +83,7 @@ Each node should have:
 
 ### MVP must include
 
-1. Chat interface with OpenAI API key input.
+1. Chat interface with Google Gemini API key input.
 2. LLM response displayed as normal text.
 3. AI-generated candidate cards extracted from the response.
 4. Drag-and-drop cards from chat panel to canvas.
@@ -116,7 +116,7 @@ Each node should have:
 
 1. User opens SproutMap AI.
 
-2. User enters their OpenAI API key.
+2. User enters their Google Gemini API key.
 
 3. User starts a new workspace.
 
@@ -846,7 +846,7 @@ Backend:
 Option A for fastest MVP:
 
 1. Next.js API route
-2. OpenAI Responses API
+2. Google Gemini API (`generateContent`)
 3. No user database
 4. User provides API key per session
 
@@ -858,7 +858,7 @@ Option B for pure frontend prototype:
 
 Recommended MVP choice:
 
-Use Next.js with an API route. The browser sends the user’s API key to the serverless route for each request. The serverless route forwards the request to OpenAI and must not log or store the key.
+Use Next.js with an API route. The browser sends the user’s API key to the serverless route for each request. The serverless route forwards the request to the Google Gemini API and must not log or store the key.
 
 ---
 
@@ -866,11 +866,11 @@ Use Next.js with an API route. The browser sends the user’s API key to the ser
 
 MVP principle:
 
-1. User provides their own OpenAI API key.
+1. User provides their own Google Gemini API key.
 2. The app does not store the key on the server.
 3. The key can be stored in sessionStorage for convenience.
 4. The user can clear it at any time.
-5. The app should show a warning: “Your key is used only to call the OpenAI API. Do not use this on an untrusted deployment.”
+5. The app should show a warning: “Your key is used only to call the Gemini API. Do not use this on an untrusted deployment.”
 
 Do not build payment or subscription in MVP.
 
@@ -878,36 +878,41 @@ Do not build payment or subscription in MVP.
 
 ## 14.3 Model policy
 
-Only allow selected modern OpenAI models.
+Only allow selected modern Google Gemini models.
 
 Recommended whitelist:
 
 ```ts
 const ALLOWED_MODELS = [
-  "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.4-mini"
+  "gemini-3-flash-preview",
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite"
 ];
 ```
 
 Default model:
 
 ```ts
-"gpt-5.4-mini"
+"gemini-3-flash-preview"
 ```
 
 Reason:
 
-1. Lower cost.
+1. Strong, low-cost Flash tier.
 2. Good enough for structured extraction.
 3. Faster iteration.
 
-Use stronger model only for:
+Use a stronger model (e.g. `gemini-3.1-pro-preview` / `gemini-2.5-pro`) only for:
 
 1. Complex map restructuring.
 2. Long context synthesis.
 3. Deep reasoning.
 4. Large map summarization.
+
+Structured output is enforced via the Gemini `generationConfig.responseSchema`
+with `responseMimeType: "application/json"`.
 
 ---
 
@@ -1251,7 +1256,7 @@ Mitigation:
 
 1. Add API key input.
 2. Add API route.
-3. Call OpenAI Responses API.
+3. Call Google Gemini API (`generateContent`).
 4. Parse structured JSON output.
 5. Show answer and candidate cards.
 
@@ -1285,7 +1290,7 @@ Mitigation:
 
 The MVP is done when the user can:
 
-1. Enter an OpenAI API key.
+1. Enter a Google Gemini API key.
 2. Ask a broad question.
 3. Receive a normal AI answer.
 4. See 3–7 candidate cards.
